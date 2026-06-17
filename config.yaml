@@ -1,0 +1,77 @@
+# Конфигурация автонавигации. Все секции необязательны — отсутствующие берут
+# значения по умолчанию из genshin_nav/config.py.
+
+capture:
+  region: null            # [left, top, width, height] окна игры; null = автопоиск по заголовку
+  window_title: "Genshin Impact"
+  backend: dxcam          # dxcam (быстро, Windows) | mss (фолбэк)
+  target_fps: 60
+
+minimap:
+  region: [52, 22, 200, 200]      # регион миникарты под 1920x1080; откалибровать!
+  world_atlas_path: null          # путь к сшитому атласу мира (north-up) для глоб. локализации
+  atlas_meters_per_px: 1.0
+  minimap_meters_per_px: 4.166
+  move_min_shift_m: 0.05          # ниже этого сдвига карты курс из движения не считаем (стоим)
+  move_sign: -1                   # знак движения vs сдвиг карты (сверено с конусом камеры: -1)
+  use_cone_fallback: false        # ТЕСТ: выкл конус (уводит курс вбок); стоя держим послед. курс по карте
+  heading_sample_dt: 0.15         # сравниваем кадры с этим интервалом (с), а не каждый кадр
+  heading_min_response: 0.15      # отбрасывать сэмплы phaseCorrelate ниже этого качества (шум)
+  heading_move_floor_px: 0.15     # сдвиг карты за сэмпл, ниже которого считаем что стоим
+  heading_smooth_alpha: 0.4       # сглаживание курса (круговое EMA): больше = резче реакция
+  motion_ring_inner_frac: 0.25    # кольцевая маска: убрать центральный маркер игрока
+  motion_ring_outer_frac: 0.48    # и углы квадрата (3D-сцена за кругом миникарты)
+  arrow_hsv_low: [85, 140, 160]   # ЯРКАЯ cyan стрелка игрока (порог ужесточён по дампу: спред 0.2°)
+  arrow_hsv_high: [108, 255, 255] # только сама стрелка, не тусклый конус
+  arrow_roi_frac: 0.22            # зона поиска стрелки (стрелка вылезает за узкие 0.10)
+
+camera:
+  fov_horizontal_deg: 45.0
+  image_width: 1920
+  image_height: 1080
+  orbit_radius_m: 4.5             # радиус орбиты камеры 3-го лица вокруг персонажа
+  deg_per_mouse_unit: 0.12        # КАЛИБРОВАТЬ под свою чувствительность мыши!
+
+sam:
+  enabled: true
+  model_id: "facebook/sam3"       # для openvino — путь к .xml IR-модели
+  backend: torch                  # torch | openvino (openvino -> увести с дискретки)
+  device: cuda                    # torch: cuda|cpu ; openvino: GPU.0(iGPU)|GPU.1(dGPU)|CPU|NPU
+  max_interval_frames: 120        # верхний предел форс-ресинка
+  input_downscale: 0.5
+  points_per_side: 16
+  roi_only: true                  # сегментировать только ROI вокруг ожидаемого объекта
+  roi_pad_px: 24
+  use_tracker: false              # Sam3Tracker между кейфреймами (лучше через openvino/CPU)
+
+keyframe:
+  on_camera_wobble: true          # триггер: покачивание камеры (шаг триангуляции)
+  on_low_confidence: true         # триггер: дрейф optical-flow / потеря точек
+  min_good_features: 40
+  max_flow_residual_px: 6.0
+  min_frames_between: 8
+
+semantic:
+  enabled: false                  # включить для смысловой разметки (монстры/деревья)
+  model_name: segformer
+  weights_path: null
+  device: cuda
+  monster_labels: ["person", "animal"]
+  obstacle_labels: ["tree", "rock", "building", "wall", "fence"]
+
+control:
+  move_key: w
+  jump_key: space
+  sprint_key: shift
+  stuck_window_s: 1.5
+  stuck_min_displacement_m: 0.4
+  waypoint_tolerance_m: 2.0
+  corridor_half_width_m: 1.2
+  corridor_length_m: 6.0
+  input_backend: pydirectinput    # pydirectinput | pynput
+  dry_run: false                  # true = считать и логировать, но НЕ вводить (или флаг --dry-run)
+
+fusion:
+  minimap_pos_var: 4.0            # доверие к миникарте (больше = грубее)
+  flow_vel_var: 0.25             # доверие к скорости от optical-flow (меньше = точнее)
+  process_var: 0.5
