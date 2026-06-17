@@ -73,3 +73,4 @@ python run.py --config config.yaml --route routes\example_route.json
 
 Подробности математики и фьюжна — в [docs/architecture.md](docs/architecture.md).
 "# GenshinAutoFarmSoft" 
+"# GenshinAutoFarmSoft" 
