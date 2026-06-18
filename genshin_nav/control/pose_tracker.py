@@ -22,6 +22,13 @@ from typing import Optional, Tuple
 from ..capture.screen_capture import ScreenCapture
 from ..minimap.minimap_reader import MinimapReader
 
+# Гибридный детектор курса (motion-primary + arrow fallback + EMA-гейт). Лежит в
+# корне проекта; на sys.path его кладут раннеры (run_route/follow_route).
+try:
+    import heading_detector as _hd
+except Exception:  # pragma: no cover
+    _hd = None
+
 
 @dataclass
 class Pose:
@@ -38,6 +45,14 @@ class PoseTracker:
         self.cap = ScreenCapture(cfg.capture.region, cfg.capture.backend,
                                  cfg.capture.target_fps, cfg.capture.window_title)
         self.minimap = MinimapReader(cfg.minimap)
+        # КУРС — гибридный детектор (motion-primary). Стрелка-primary в MinimapReader
+        # давала затяжные срывы (~1с на 100°), сглаживание их не лечило. Motion при
+        # движении однозначен. Фолбэк на minimap.read().heading_deg, если модуль не
+        # импортировался или EMA ещё не инициализирована.
+        # ВРЕМЕННО ОТКЛЮЧЕНО: motion-курс убегал (зеркало истинного курса — на поворотах
+        # уходил до 180°). Формула (sx,sy)->курс не определяется по эталону из ОДНОГО
+        # направления. Включим обратно после калибровки по дампу «круг» (probe_circle.py).
+        self.heading_det = None  # _hd.HeadingDetector(crop=False) if _hd is not None else None
         self._pos = [0.0, 0.0]            # накопленная позиция (метры)
         self._last_heading = 0.0
         self._last_t = time.monotonic()
@@ -60,8 +75,19 @@ class PoseTracker:
         if r.delta_xy_m is not None:          # delta уже гейтится по движению в MinimapReader
             self._pos[0] += r.delta_xy_m[0]
             self._pos[1] += r.delta_xy_m[1]
-        if r.heading_deg is not None:
-            self._last_heading = r.heading_deg
+
+        # КУРС: гибридный детектор поверх кропа миникарты; фолбэк — курс из MinimapReader.
+        heading = None
+        if self.heading_det is not None:
+            l, t, w, h = self.cfg.minimap.region
+            mm = frame[t:t + h, l:l + w]
+            hres = self.heading_det.update(mm)
+            if self.heading_det._ema is not None:   # EMA инициализирована → курс осмыслен
+                heading = hres.heading
+        if heading is None:
+            heading = r.heading_deg               # фолбэк (стрелка/сдвиг карты)
+        if heading is not None:
+            self._last_heading = heading
         return Pose(player_xy=(self._pos[0], self._pos[1]),
                     heading_deg=self._last_heading,
                     moving=self.minimap._moving, conf=r.confidence, dt=dt)

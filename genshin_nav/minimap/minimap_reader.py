@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import math
+from collections import deque
 from dataclasses import dataclass
 from typing import Optional, Tuple
 
@@ -51,6 +52,17 @@ class MinimapReader:
         self._arrow_smooth: Optional[float] = None        # сглаженный курс по стрелке игрока
         self._arrow_bad: int = 0                          # счётчик подряд идущих «скачков» (выбросов)
         self._last_world: Optional[Tuple[float, float]] = None
+        # КРУГОВАЯ МЕДИАНА курса по стрелке — главный фильтр выбросов. Сверено на дампе
+        # «круг» (probe_circle.py, 742 кадра по всем направлениям): сырая стрелка верна
+        # в ~88% (медиана скачка 0.5°), но 12% кадров — одиночные спайки до 147°. Медиана
+        # медиана их гасит (p90 скачка 112°→4°), НЕ лагая как EMA. Окно 5 — баланс:
+        # давит одиночные/двойные спайки, но БЕЗ лага (окно 9 отставало на поворотах,
+        # «стрелка вела хуже»; редкие 4-кадровые глюки терпим — они не стоят лага).
+        # Motion-курс на этом зуме мёртв (сдвиг суб-пиксельный, макс 0.5px) — поэтому стрелка.
+        self._arrow_buf: deque = deque(maxlen=5)   # окно 5: давит спайки БЕЗ лага (9 лагало на поворотах)
+        self._main_heading_smooth: Optional[float] = None   # (устар., EMA-фолбэк)
+        self._main_heading_bad: int = 0
+        self._heading_smooth_alpha = 0.15
         if atlas is None and cfg.world_atlas_path:
             self.load_atlas(cfg.world_atlas_path)
 
@@ -151,18 +163,20 @@ class MinimapReader:
     def relative_shift(self, minimap_bgr: np.ndarray) -> Optional[Tuple[float, float]]:
         """
         Сдвиг ТЕКСТУРЫ карты в метрах между текущим и прошлым кадром.
-        Миникарта север-залочена -> НЕ разворачиваем кроп. Hann-окно подавляет
-        краевые артефакты (рамка/HUD по краям квадратного кропа).
+        Миникарта север-залочена -> НЕ разворачиваем кроп. Маскируем тем же
+        КОЛЬЦЕВЫМ окном (_motion_window), что и курс: вырезаем центральный маркер
+        игрока, иначе вращающаяся cyan-стрелка тянет phaseCorrelate к себе и
+        одометрия недооценивает путь + получает направление-зависимый сдвиг (увод
+        трека). Окно уже содержит Hann, поэтому отдельное Hann-окно не нужно.
         """
         gray = cv2.cvtColor(minimap_bgr, cv2.COLOR_BGR2GRAY).astype(np.float32)
-        if self._hann is None or self._hann.shape != gray.shape:
-            self._hann = cv2.createHanningWindow(gray.shape[::-1], cv2.CV_32F)
+        g = gray * self._motion_window(gray.shape)
         out = None
-        if self._prev_crop_gray is not None and self._prev_crop_gray.shape == gray.shape:
-            (sx, sy), _ = cv2.phaseCorrelate(self._prev_crop_gray, gray, self._hann)
+        if self._prev_crop_gray is not None and self._prev_crop_gray.shape == g.shape:
+            (sx, sy), _ = cv2.phaseCorrelate(self._prev_crop_gray, g)
             mpp = self.cfg.minimap_meters_per_px
             out = (sx * mpp, sy * mpp)
-        self._prev_crop_gray = gray
+        self._prev_crop_gray = g
         return out
 
     def _motion_window(self, shape: Tuple[int, int]) -> np.ndarray:
@@ -293,6 +307,53 @@ class MinimapReader:
         self._arrow_smooth = raw
         return raw
 
+    def _median_arrow(self, raw: Optional[float]) -> Optional[float]:
+        """Круговая медиана последних N курсов по стрелке — гасит одиночные спайки
+        детектора (конус/хвост/пин), НЕ внося лага EMA. Медиана = элемент буфера с
+        минимальной суммой |угловых разниц| до остальных (устойчива к выбросам)."""
+        if raw is not None:
+            self._arrow_buf.append(raw)
+        if not self._arrow_buf:
+            return None
+        buf = list(self._arrow_buf)
+        best, best_s = buf[0], 1e18
+        for x in buf:
+            s = sum(abs(self._ang_diff(x, y)) for y in buf)
+            if s < best_s:
+                best_s, best = s, x
+        return best
+
+    @staticmethod
+    def _smooth_angle(new_angle: float, old_angle: float, alpha: float) -> float:
+        """Плавное усреднение углов с учётом цикличности (0..360)."""
+        diff = (new_angle - old_angle + 180.0) % 360.0 - 180.0
+        return float((old_angle + alpha * diff) % 360.0)
+
+    def _filter_heading(self, raw: Optional[float]) -> Optional[float]:
+        """
+        Фильтр выбросов + EMA для ОСНОВНОГО курса. Скачок >50° держим старое (с
+        подтверждением 2 кадра), иначе сглаживаем. ВНИМАНИЕ: это смягчает прыжки
+        arrow-primary, но не лечит корень — глюк стрелки на 2+ кадра проходит, а
+        alpha=0.15 добавляет лаг. Настоящий фундамент — heading_detector.py (motion).
+        """
+        JUMP_DEG = 50.0
+        JUMP_CONFIRM = 2
+        if raw is None:
+            return self._main_heading_smooth
+        if self._main_heading_smooth is None:
+            self._main_heading_smooth = raw
+            self._main_heading_bad = 0
+            return raw
+        if abs(self._ang_diff(raw, self._main_heading_smooth)) > JUMP_DEG:
+            self._main_heading_bad += 1
+            if self._main_heading_bad < JUMP_CONFIRM:
+                return self._main_heading_smooth          # выброс — держим старое
+        else:
+            self._main_heading_bad = 0
+        self._main_heading_smooth = self._smooth_angle(
+            raw, self._main_heading_smooth, self._heading_smooth_alpha)
+        return self._main_heading_smooth
+
     # ---- основной вызов ----------------------------------------------------
     def read(self, frame_bgr: np.ndarray) -> MinimapReading:
         """frame_bgr — полный кадр игры; регион миникарты берём из cfg."""
@@ -300,25 +361,31 @@ class MinimapReader:
         now = _time.monotonic()
         l, t, w, h = self.cfg.region
         mm = frame_bgr[t:t + h, l:l + w]
-        arrow_h = self._filter_arrow(self.read_heading(mm))  # СТРЕЛКА игрока + фильтр выбросов (срывы детектора)
+        arrow_h = self._median_arrow(self.read_heading(mm))  # СТРЕЛКА игрока + круговая медиана (гасит спайки)
         map_h = self._heading_from_motion(mm, now)       # курс по сдвигу карты (ставит self._moving)
         cone_h = self._cone_heading(mm)                  # курс по конусу камеры (резерв)
         delta = self.relative_shift(mm)                  # сдвиг карты за кадр (для скорости)
         if delta is not None and not self._moving:       # стоим → глушим, иначе fused_pos дрейфует
             delta = (0.0, 0.0)
 
-        # ОСНОВНОЙ курс — по стрелке игрока (мгновенный, стабильный по дампу). Если
-        # стрелка не нашлась — падаем на свежий курс по сдвигу карты, затем на конус.
+        # ОСНОВНОЙ курс — по СТРЕЛКЕ игрока. Подтверждено живым дампом
+        # (diag_fast_dump.py): 180/180 кадров, круговой СКО 0.1° — идеально стабильна
+        # после ужесточения HSV. И она СОГЛАСОВАНА с системой follower'а: при
+        # move_sign=-1 стрелка совпадает с курсом-из-сдвига-карты в пределах ~7°.
+        # Курс-из-сдвига-карты на этом зуме миникарты НЕЧИТАЕМ (сдвиг при ходьбе
+        # медиана 0.01px, выше floor лишь 8% кадров) → годится только как фолбэк,
+        # когда стрелка не нашлась. Конус — последний резерв.
         fresh = (now - self._head_last_update_t) < self.cfg.heading_stale_after_s
         if arrow_h is not None:
-            heading = arrow_h
+            heading = arrow_h                            # ОСНОВНОЙ: стрелка (стабильна, согласована)
         elif fresh and map_h is not None:
-            heading = map_h
+            heading = map_h                              # стрелка пропала → свежий сдвиг карты
         elif cone_h is not None:
             heading = cone_h
         else:
             heading = map_h                              # последний удержанный
 
+        # медиана уже применена к стрелке выше; доп. EMA не нужна (вносила лаг)
         world = self.localize(mm, 0.0)                   # атлас north-up (если задан)
         conf = 0.9 if world is not None else (0.6 if heading is not None else 0.2)
         return MinimapReading(heading, cone_h, world, delta, conf)
