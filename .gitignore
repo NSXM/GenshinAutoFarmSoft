@@ -1,0 +1,10 @@
+.venv/ 
+__pycache__/ 
+*.pyc 
+__pycache__/ 
+*.pyc 
+shots/ 
+diag/ 
+*.pyc 
+shots/ 
+diag/ 

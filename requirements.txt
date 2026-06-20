@@ -1,0 +1,27 @@
+# --- Базовое (нужно всегда) ---
+numpy>=1.26,<2.2
+opencv-python>=4.9
+pyyaml>=6.0
+mss>=9.0                 # фолбэк-захват экрана (кроссплатформенный)
+
+# --- Захват экрана (быстрый, Windows) ---
+dxcam>=0.0.5             # DXGI Desktop Duplication; основной бэкенд
+
+# --- Симуляция ввода в DirectX-игру ---
+pydirectinput>=1.0.4     # SendInput на скан-кодах (Genshin игнорирует pyautogui)
+pynput>=1.7              # фолбэк
+keyboard>=0.13           # аварийная остановка по F12
+pygetwindow>=0.0.9       # автопоиск окна игры
+
+# --- SAM3 (perception, шаг 2). Ставить отдельно под своё железо ---
+# torch / torchvision: установить с нужным CUDA-колесом с https://pytorch.org
+# torch>=2.2
+# transformers>=4.46     # Sam3Processor / Sam3Model
+# Веса: huggingface.co/facebook/sam3  (huggingface-cli login + загрузка)
+
+# --- Семантическая разметка (шаг 3, опционально) ---
+# semantic-segmentation: pip install git+https://github.com/sithu31296/semantic-segmentation
+
+# --- OpenVINO (увести инференс с дискретной GPU на CPU/iGPU/NPU) ---
+# openvino>=2024.0
+# openvino-dev>=2024.0   # для конвертации моделей в IR
