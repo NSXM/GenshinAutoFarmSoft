@@ -83,11 +83,22 @@ class RouteHUD:
         self.enabled = cv2 is not None and len(route.waypoints) > 0
         self._trail = []                  # след пройденной позиции (для наглядности)
 
-        # габариты маршрута в экранной системе P=(-x,-y) — считаем один раз
+        self._compute_bounds(route)
+
+    def _compute_bounds(self, route):
+        """Габариты маршрута в экранной системе P=(-x,-y) для масштабирования плана."""
         self._sx = [-w.x for w in route.waypoints]
         self._sy = [-w.y for w in route.waypoints]
-        self._minx, self._maxx = min(self._sx), max(self._sx)
-        self._miny, self._maxy = min(self._sy), max(self._sy)
+        self._minx, self._maxx = (min(self._sx), max(self._sx)) if self._sx else (0.0, 1.0)
+        self._miny, self._maxy = (min(self._sy), max(self._sy)) if self._sy else (0.0, 1.0)
+
+    def set_route(self, route):
+        """Сменить отображаемый маршрут (между сегментами цепочки): пересчитать
+        габариты плана и очистить след."""
+        self.route = route
+        self.enabled = cv2 is not None and len(route.waypoints) > 0
+        self._trail = []
+        self._compute_bounds(route)
 
     # ---- мир -> пиксели плана -------------------------------------------------
     def _to_px(self, wx: float, wy: float, pad: int = 24):

@@ -155,6 +155,23 @@ class InputSimulator:
         print(f"[rotate_camera] dyaw_deg={dyaw_deg:+7.2f}  yaw_sign={yaw_sign:+.0f}  -> dx={dx:+5d}")
         self.move_mouse_raw(dx, 0)
 
+    def click_at(self, x: int, y: int):
+        """ЛКМ по АБСОЛЮТНЫМ экранным координатам (для меню/всплывашек, где курсор
+        виден). Нужно для закрытия всплывашки телепорта. В dry-run — только лог."""
+        x, y = int(x), int(y)
+        if self.dry_run:
+            print(f"[dry] click_at ({x},{y})")
+            return
+        if self._backend == "pydirectinput":
+            self._pdi.moveTo(x, y)
+            time.sleep(0.05)
+            self._pdi.click(x, y)
+        elif self._backend == "pynput":
+            from pynput.mouse import Button
+            self._ms.position = (x, y)
+            time.sleep(0.05)
+            self._ms.click(Button.left, 1)
+
     def release_all(self):
         for k in list(self._held):
             self.key_up(k)

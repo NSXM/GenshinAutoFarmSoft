@@ -11,6 +11,7 @@
     камеру/мышь по ходу. Скорость бега держи обычную (= control.dead_reckon_speed).
 
   F8  — записать точку вручную.
+  F7  — записать точку-ТЕЛЕПОРТ = КОНЕЦ маршрута (сразу сохраняет и выходит).
   F9  — сохранить и выйти.
   --auto N — ронять точку автоматически каждые N метров пути (рекомендуется, напр. 2).
   --mode odometry — писать по одометрии миникарты (старое; обычно хуже).
@@ -34,6 +35,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from genshin_nav.config import Config
 from genshin_nav.control.pose_tracker import PoseTracker
 from genshin_nav.control.route import Route, Waypoint, save_route
+from genshin_nav.minimap.localizer import make_fingerprint, save_fingerprints, fp_path_for
 
 
 def main():
@@ -46,6 +48,7 @@ def main():
     ap.add_argument("--mode", choices=["dead_reckon", "odometry"], default="dead_reckon",
                     help="dead_reckon (как едет бот; реком.) | odometry (сдвиг миникарты)")
     ap.add_argument("--key", default="f8", help="клавиша записи точки (Genshin её не должен занимать)")
+    ap.add_argument("--tp-key", default="f7", help="клавиша записи точки-ТЕЛЕПОРТА (action=teleport)")
     ap.add_argument("--stop-key", default="f9", help="клавиша сохранить и выйти")
     args = ap.parse_args()
 
@@ -60,21 +63,34 @@ def main():
     spd = cfg.control.dead_reckon_speed       # та же скорость, что у исполнителя
 
     wps: list[Waypoint] = []
+    fps: list = []                # отпечаток миникарты на каждой точке (для локализации)
     last_auto_xy = None
     start_heading = None          # курс по стрелке в начале движения по маршруту
     head_at_first = None          # фолбэк: курс на самой первой точке
+
+    def grab_fp():
+        """Отпечаток миникарты текущего кадра (для teach-and-repeat локализации)."""
+        f = tracker.last_frame
+        if f is None:
+            return None
+        l, t, w, h = cfg.minimap.region
+        return make_fingerprint(f[t:t + h, l:l + w])
 
     # DEAD-RECKONING позиции (та же формула, что в route_runner): смещение на курс
     # θ = (-sinθ, cosθ)·spd·dt. Система координат совпадает с follower (восток=-x).
     dr = [0.0, 0.0]
     dr_t = None
+    started = False                       # запись начнётся только после первого нажатия W
+    move_key = cfg.control.move_key
 
     print("[record] 3 секунды на переключение в игру...")
     time.sleep(3)
     mode_str = ("DEAD-RECKON (зажми W и БЕГИ непрерывно!)" if args.mode == "dead_reckon"
                 else "ODOMETRY (сдвиг миникарты)")
     print(f"[record] режим: {mode_str}")
-    print(f"[record] {args.key.upper()} — точка, {args.stop_key.upper()} — сохранить и выйти"
+    print(f"[record] запись точек начнётся, как только нажмёшь {move_key.upper()} (движение).")
+    print(f"[record] {args.key.upper()} — точка, {args.tp_key.upper()} — точка-ТЕЛЕПОРТ (= конец, сохранить и выйти), "
+          f"{args.stop_key.upper()} — сохранить и выйти"
           + (f" | авто-точка каждые {args.auto:.1f} м" if args.auto > 0 else ""))
 
     try:
@@ -83,6 +99,19 @@ def main():
             if pose is None:
                 time.sleep(0.001)
                 continue
+
+            # ждём первого нажатия W — до него ничего не пишем (чистый старт без
+            # фантомного дрейфа, пока стоишь). F9 работает и тут.
+            if not started:
+                if keyboard.is_pressed(args.stop_key):
+                    break
+                if keyboard.is_pressed(move_key):
+                    started = True
+                    dr_t = None           # сбросить часы, чтобы первый dt не был огромным
+                    print(f"[record] {move_key.upper()} нажат — старт записи точек")
+                else:
+                    time.sleep(0.01)
+                    continue
 
             # позиция: dead-reckon (по курсу) или одометрия миникарты
             now = time.monotonic()
@@ -97,9 +126,22 @@ def main():
             else:
                 px, py = pose.player_xy
 
+            # точка-ТЕЛЕПОРТ по клавише — это КОНЕЦ маршрута: записываем и выходим
+            if keyboard.is_pressed(args.tp_key):
+                wps.append(Waypoint(round(px, 2), round(py, 2), action="teleport"))
+                fps.append(grab_fp())
+                if len(wps) == 1:
+                    head_at_first = pose.heading_deg
+                elif len(wps) == 2 and start_heading is None:
+                    start_heading = pose.heading_deg
+                print(f"  +точка #{len(wps)} (ТЕЛЕПОРТ): ({px:.2f}, {py:.2f})  hdg={pose.heading_deg:.0f}")
+                print("[record] точка-телепорт = конец маршрута → сохраняю и выхожу")
+                break
+
             # ручная точка по клавише
-            if keyboard.is_pressed(args.key):
+            elif keyboard.is_pressed(args.key):
                 wps.append(Waypoint(round(px, 2), round(py, 2)))
+                fps.append(grab_fp())
                 last_auto_xy = (px, py)
                 if len(wps) == 1:
                     head_at_first = pose.heading_deg
@@ -114,6 +156,7 @@ def main():
                     last_auto_xy = (px, py)
                 elif math.hypot(px - last_auto_xy[0], py - last_auto_xy[1]) >= args.auto:
                     wps.append(Waypoint(round(px, 2), round(py, 2)))
+                    fps.append(grab_fp())
                     last_auto_xy = (px, py)
                     if len(wps) == 1:
                         head_at_first = pose.heading_deg
@@ -135,6 +178,17 @@ def main():
     save_route(route, args.out)
     sh_str = f"{sh:.1f}°" if sh is not None else "нет"
     print(f"[record] сохранено {len(wps)} точек ({args.mode}), start_heading={sh_str} -> {args.out}")
+    # отпечатки миникарты для абсолютной локализации (teach-and-repeat)
+    if any(f is not None for f in fps):
+        fp_out = fp_path_for(args.out)
+        n_ok = save_fingerprints(fp_out, fps)
+        print(f"[record] отпечатки миникарты: {n_ok}/{len(fps)} -> {fp_out}")
+    else:
+        print("[record] отпечатки миникарты не сохранены (нет cv2/кадров)")
+    if sh is None or abs(sh) < 0.5:
+        print("[record] ⚠ ВНИМАНИЕ: start_heading отсутствует/≈0 — курс при записи не "
+              "считался (стрелка не найдена?). Сегмент поедет НЕ ТУДА. Перезапиши: "
+              "убедись, что миникарта видна и персонаж двигается с первых метров.")
 
 
 if __name__ == "__main__":

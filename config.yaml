@@ -14,11 +14,23 @@ control:
   dry_run: false
   dead_reckon_speed: 5.5
   position_source: dead_reckon    # dead_reckon (плавно, не замерзает) | odometry (точнее по фрейму, но на зуме 4.166 глючит/замерзает)
-  turn_deadzone_deg: 4.0
-  turn_gain: 1.0
-  turn_throttle_s: 0.12
+  sprint: false                    # бежать с зажатым Shift (быстрее; тратит стамину)
+  sprint_max_err_deg: 30.0        # спринт ТОЛЬКО при |ошибке курса|<этого; на поворотах идём шагом (меньше занос)
+  heading_trim_deg: 0.0           # компенсация стабильного увода: вправо уходит → +2..+4; влево → отрицательное
+  teleport_dismiss_xy: [955, 1016] # ЭКРАН: куда ЛКМ, чтобы закрыть F-меню после активации. КАЛИБРОВАТЬ: scripts/calibrate_click.py
+  teleport_dismiss_wait_s: 0.5    # пауза после закрытия F-меню, до нажатия M
+  teleport_wait_menu_s: 4.5       # ждать появления F-меню после нажатия F
+  teleport_after_s: 3.5
+  teleport_tolerance_m: 2.0
+  teleport_detect_template: true   # жать F по реально видимой подсказке «F Точка телепортации» (надёжнее дрейфа)
+  teleport_template_path: Fteleport.png
+  teleport_template_threshold: 0.7
+  teleport_detect_radius_m: 8.0    # с какого расстояния до точки начинать искать подсказку
+  turn_deadzone_deg: 7.0
+  turn_gain: 1
+  turn_throttle_s: 0.22
   turn_max_units: 120
-  lookahead_m: 6.0
+  lookahead_m: 8.0
   align_tolerance_deg: 12.0
 
 capture:

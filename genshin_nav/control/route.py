@@ -24,6 +24,9 @@ from typing import List, Optional
 class Waypoint:
     x: float
     y: float
+    # Действие при достижении точки. None — обычная точка. "teleport" — активировать
+    # телепорт (route_runner._do_teleport): стоп → F → закрыть всплывашку → дальше.
+    action: Optional[str] = None
 
 
 @dataclass
@@ -37,18 +40,23 @@ class Route:
     # довернётся вдоль маршрута. None у старых маршрутов (фолбэк на старую
     # калибровку «стой лицом вдоль маршрута»). См. route_runner.run().
     start_heading: Optional[float] = None
+    # Путь файла маршрута (runtime, не сериализуется) — чтобы найти рядом отпечатки
+    # миникарты <маршрут>.fp.npz для абсолютной локализации (localizer.py).
+    source_path: Optional[str] = None
 
 
 def load_route(path: str) -> Route:
     with open(path, "r", encoding="utf-8") as f:
         data = json.load(f)
-    wps = [Waypoint(float(p["x"]), float(p["y"])) for p in data.get("waypoints", [])]
+    wps = [Waypoint(float(p["x"]), float(p["y"]), p.get("action"))
+           for p in data.get("waypoints", [])]
     sh = data.get("start_heading", None)
     return Route(
         name=data.get("name", "recorded"),
         minimap_meters_per_px=float(data.get("minimap_meters_per_px", 0.0)),
         waypoints=wps,
         start_heading=(float(sh) if sh is not None else None),
+        source_path=path,
     )
 
 
@@ -59,7 +67,11 @@ def save_route(route: Route, path: str) -> None:
         "minimap_meters_per_px": round(route.minimap_meters_per_px, 4),
         "start_heading": (round(route.start_heading, 1)
                           if route.start_heading is not None else None),
-        "waypoints": [{"x": round(w.x, 2), "y": round(w.y, 2)} for w in route.waypoints],
+        "waypoints": [
+            ({"x": round(w.x, 2), "y": round(w.y, 2), "action": w.action}
+             if w.action else {"x": round(w.x, 2), "y": round(w.y, 2)})
+            for w in route.waypoints
+        ],
     }
     with open(path, "w", encoding="utf-8") as f:
         json.dump(out, f, ensure_ascii=False, indent=2)
