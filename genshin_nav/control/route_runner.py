@@ -343,6 +343,30 @@ class RouteRunner:
         self._drive()
         print("[run] ТЕЛЕПОРТ: готово, продолжаю маршрут")
 
+    def _do_climb(self, dur: float):
+        """Карабканье на стену/скалу: высоту миникарта не видит, поэтому подъём —
+        по времени. Прыжок (зацепиться за выступ) → держим W вверх dur секунд, с
+        до-прыжками на выступах. Dead-reckon на время подъёма не интегрируем."""
+        c = self.cfg.control
+        do_jump = getattr(c, "climb_jump", True)
+        print(f"[run] КАРАБКАНЬЕ: {'прыжок + ' if do_jump else ''}держу W {dur:.1f}с")
+        self._set_sprint(False)
+        if do_jump:
+            self.inp.jump()                 # зацепиться за выступ
+            time.sleep(0.15)
+        self.inp.start_moving()             # держим W — лезем вверх
+        t_end = time.monotonic() + dur
+        next_jump = time.monotonic() + getattr(c, "climb_jump_interval_s", 1.5)
+        while time.monotonic() < t_end and self._running:
+            if do_jump and time.monotonic() >= next_jump:   # подпрыгнуть на выступе
+                self.inp.jump()
+                next_jump = time.monotonic() + getattr(c, "climb_jump_interval_s", 1.5)
+            self.tracker.poll()             # держим захват живым
+            time.sleep(0.02)
+        self._dr_t = None                   # не интегрировать подъём в dead-reckon
+        self._drive()
+        print("[run] КАРАБКАНЬЕ: готово, продолжаю маршрут")
+
     def _map_teleport(self):
         """Только часть с картой: M → пауза → клик жёлтый ромбик → клик иконка
         «Точка телепортации» слева → клик кнопка «Телепорт» снизу. Вынесено отдельно,
@@ -378,6 +402,12 @@ class RouteRunner:
                             if getattr(w, "action", None) == "teleport"}
         if self._tp_pending:
             print(f"[run] точек-телепортов: {len(self._tp_pending)} (индексы {sorted(self._tp_pending)})")
+        # точки-КАРАБКАНЬЯ: idx -> длительность подъёма (сек). Срабатывают по достижении.
+        self._climb_pending = {i: (getattr(w, "dur", None) or 2.0)
+                               for i, w in enumerate(route.waypoints)
+                               if getattr(w, "action", None) == "climb"}
+        if self._climb_pending:
+            print(f"[run] точек-карабканья: {len(self._climb_pending)} (индексы {sorted(self._climb_pending)})")
         if route.waypoints:
             wp0 = route.waypoints[0]
             self.tracker.set_position(wp0.x, wp0.y)
@@ -473,6 +503,9 @@ class RouteRunner:
                       f"'{route.name}', точек {len(route.waypoints)} =====")
                 self.inp.stop_moving()
                 self._set_sprint(False)            # сброс спринта между сегментами (свежий фронт потом)
+                if seg_i > 0:                      # пауза перед каждым НОВЫМ сегментом (кроме первого)
+                    print("[run] пауза 1с перед новым сегментом")
+                    time.sleep(1.0)
                 self._setup_segment(route)
                 self._drive()                      # едем (W); Shift включит цикл по ошибке курса
                 res = self._drive_segment(seg_i, trace, t_start)
@@ -538,6 +571,19 @@ class RouteRunner:
                     if fire:
                         self._do_teleport()
                         self._tp_pending.discard(idx)
+                        if self.follower.wp_idx <= idx:
+                            self.follower.wp_idx = idx + 1
+                        break
+
+            # ДЕЙСТВИЕ-КАРАБКАНЬЕ: по достижению точки лезем вверх dur секунд.
+            if self._climb_pending:
+                tol = getattr(self.cfg.control, "climb_tolerance_m",
+                              getattr(self.cfg.control, "teleport_tolerance_m", 2.0))
+                for idx in sorted(self._climb_pending):
+                    w = self.route.waypoints[idx]
+                    if math.hypot(pos[0] - w.x, pos[1] - w.y) <= tol:
+                        self._do_climb(self._climb_pending[idx])
+                        del self._climb_pending[idx]
                         if self.follower.wp_idx <= idx:
                             self.follower.wp_idx = idx + 1
                         break

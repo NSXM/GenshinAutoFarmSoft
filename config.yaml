@@ -18,10 +18,13 @@ control:
   sprint_max_err_deg: 30.0        # спринт ТОЛЬКО при |ошибке курса|<этого; на поворотах идём шагом (меньше занос)
   heading_trim_deg: 0.0           # компенсация стабильного увода: вправо уходит → +2..+4; влево → отрицательное
   teleport_dismiss_xy: [955, 1016] # ЭКРАН: куда ЛКМ, чтобы закрыть F-меню после активации. КАЛИБРОВАТЬ: scripts/calibrate_click.py
-  teleport_dismiss_wait_s: 0.5    # пауза после закрытия F-меню, до нажатия M
+  teleport_dismiss_wait_s: 7.0    # пауза после закрытия F-меню, до нажатия M
   teleport_wait_menu_s: 4.5       # ждать появления F-меню после нажатия F
   teleport_after_s: 3.5
   teleport_tolerance_m: 2.0
+  climb_tolerance_m: 2.5           # на каком расстоянии до точки-карабканья начинаем лезть
+  climb_jump: true                 # прыгать (Space) перед подъёмом и на выступах
+  climb_jump_interval_s: 1.5       # период до-прыжков во время карабканья (сек)
   teleport_detect_template: true   # жать F по реально видимой подсказке «F Точка телепортации» (надёжнее дрейфа)
   teleport_template_path: Fteleport.png
   teleport_template_threshold: 0.7
